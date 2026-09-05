@@ -81,12 +81,14 @@ function additionalInfo(){
     blandRatio:"Bland Ratios",quality:"Quality",color:"Colour",workOrder:"Work Order",dyeingFactory:"Dyeing Factory",
     batch:"Batch",yknc:"YKNC",knittingFactory:"Knitting Factory",fabrication:"Fabrication",gsm:"GSM",mcD:"MC / D",fd:"F / D"
   };
-  content.innerHTML='<div class="panel"><h2>Additional Info</h2><p class="infoNote">Save Each Option Separately. Transaction Is Fixed By ERP And Is Not Stored In Additional Info.</p><div class="additionalGrid">'+
-    ADDITIONAL_FIELDS.map(k=>'<div class="additionalCard"><label>'+labels[k]+'</label><div class="additionalInputRow"><input type="text" id="add_'+k+'" autocomplete="off" placeholder="Enter '+labels[k]+'"><button class="btn addInfoBtn" data-addfield="'+k+'">Save</button></div><div class="savedOptions" id="saved_'+k+'">'+additionalOptionRows(k)+'</div></div>').join("")+
+  content.innerHTML='<div class="panel additionalPanel"><h2>Additional Info</h2><p class="infoNote">Save Each Option Separately. Transaction Is Fixed By ERP And Is Not Stored In Additional Info.</p><div class="additionalGrid">'+
+    ADDITIONAL_FIELDS.map(k=>'<div class="additionalCard"><label>'+labels[k]+'</label><div class="additionalInputRow"><input type="text" id="add_'+k+'" autocomplete="off" placeholder="Enter '+labels[k]+'"><button class="btn addInfoBtn" data-addfield="'+k+'">Save</button></div><div class="additionalTools"><input class="additionalSearch" data-searchfield="'+k+'" placeholder="Search..." autocomplete="off"><button class="btn exportBtn additionalExport" data-exportfield="'+k+'">Download Excel</button></div><div class="savedOptions" id="saved_'+k+'">'+additionalOptionRows(k)+'</div></div>').join("")+
     '</div></div>';
   ADDITIONAL_FIELDS.forEach(k=>{
     const input=document.getElementById("add_"+k);
     input.addEventListener("input",()=>input.value=titleCaseText(input.value));
+    const search=document.querySelector('.additionalSearch[data-searchfield="'+k+'"]');
+    search.addEventListener("input",()=>filterAdditionalValues(k,search.value));
   });
   content.querySelectorAll(".addInfoBtn").forEach(b=>b.onclick=()=>{
     const k=b.dataset.addfield,input=document.getElementById("add_"+k),v=normalizeKeyValue(input.value);
@@ -99,7 +101,23 @@ function additionalInfo(){
     const k=b.dataset.afield,v=decodeURIComponent(b.dataset.avalue);
     if(confirm('Delete "'+v+'"?')){D.additional[k]=D.additional[k].filter(x=>x!==v);save();additionalInfo();}
   });
+  content.querySelectorAll(".additionalExport").forEach(b=>b.onclick=()=>exportAdditionalFieldExcel(b.dataset.exportfield,labels[b.dataset.exportfield]));
 }
+function filterAdditionalValues(field,query){
+  const q=String(query||"").trim().toLowerCase();
+  const box=document.getElementById("saved_"+field); if(!box)return;
+  const vals=allTextValues(field).filter(v=>!q||String(v).toLowerCase().includes(q));
+  box.innerHTML=vals.map(v=>'<div class="savedOption"><span>'+esc(v)+'</span><button class="del" data-afield="'+field+'" data-avalue="'+encodeURIComponent(v)+'">Delete</button></div>').join("")||'<div class="empty">No Matching Values.</div>';
+  box.querySelectorAll(".del").forEach(b=>b.onclick=()=>{const k=b.dataset.afield,v=decodeURIComponent(b.dataset.avalue);if(confirm('Delete "'+v+'"?')){D.additional[k]=D.additional[k].filter(x=>x!==v);save();additionalInfo();}});
+}
+function exportAdditionalFieldExcel(field,label){
+  const values=allTextValues(field); const rows=values.map(v=>({[label]:v}));
+  if(typeof XLSX!=="undefined"){
+    const wb=XLSX.utils.book_new(),ws=XLSX.utils.json_to_sheet(rows.length?rows:[{[label]:""}]);
+    XLSX.utils.book_append_sheet(wb,ws,"Data"); XLSX.writeFile(wb,"SAG_FASHON_LTD_"+titleCaseText(label).replace(/[^A-Za-z0-9]+/g,"_")+".xlsx");
+  }else exportTableExcel("saved_"+field,label);
+}
+
 function fieldHTML(f){
   const [name,label,type,opts]=f;
   if(type==="select"){
@@ -130,80 +148,59 @@ function validateAgainstAdditionalInfo(t,o){
   return true;
 }
 
+function cloneERPData(){
+  try{return JSON.parse(JSON.stringify(D));}
+  catch(e){return {raw:[],dyed:[],grey:[],reqDyeing:[],reqKnitting:[],additional:{}};}
+}
+function normalizeAdditionalData(value){
+  const out={};
+  ADDITIONAL_FIELDS.forEach(k=>out[k]=[]);
+  if(value && !Array.isArray(value) && typeof value==='object'){
+    ADDITIONAL_FIELDS.forEach(k=>{
+      const v=value[k];
+      if(Array.isArray(v)) out[k]=v.map(x=>String(x??'')).filter(x=>x!=='');
+      else if(v!==undefined && v!==null && String(v)!=='') out[k]=[String(v)];
+    });
+  }else if(Array.isArray(value)){
+    value.forEach(row=>{
+      if(!row || typeof row!=='object') return;
+      ADDITIONAL_FIELDS.forEach(k=>{
+        if(row[k]!==undefined && row[k]!==null && String(row[k])!=='') out[k].push(String(row[k]));
+      });
+    });
+  }
+  ADDITIONAL_FIELDS.forEach(k=>out[k]=[...new Set(out[k])]);
+  return out;
+}
+function normalizeRestoredERP(value){
+  if(!value || typeof value!=='object' || Array.isArray(value)) throw new Error('Invalid ERP backup data.');
+  const out=JSON.parse(JSON.stringify(value));
+  ['raw','dyed','grey','reqDyeing','reqKnitting'].forEach(k=>{if(!Array.isArray(out[k])) out[k]=[];});
+  out.additional=normalizeAdditionalData(out.additional);
+  return out;
+}
 function backupData(){
   try{
-    const payload={
-      backupType:"SAG FASHON LTD ERP DATA BACKUP",
-      backupVersion:"V15",
-      createdAt:new Date().toISOString(),
-      data:(typeof D==="object" && D!==null)?D:{}
-    };
-    const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json;charset=utf-8"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement("a");
-    const stamp=new Date().toISOString().replace(/[:.]/g,"-");
-    a.href=url;
-    a.download="SAG_FASHON_LTD_ERP_Backup_"+stamp+".json";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),1000);
-  }catch(err){
-    alert("Backup Failed!\n\n"+err.message);
-  }
+    save();
+    const snapshot=cloneERPData();
+    const payload={backupType:'SAG FASHON LTD ERP FULL DATA BACKUP',backupMode:'FULL',backupVersion:'V16',createdAt:new Date().toISOString(),data:snapshot};
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});
+    const url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='SAG_FASHON_LTD_ERP_FULL_BACKUP_'+sagBackupStamp()+'.json';
+    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(err){alert('Backup Failed!\n\n'+err.message);}
 }
-
 function restoreData(input){
-  const file=input && input.files ? input.files[0] : null;
-  if(!file)return;
+  const file=input&&input.files?input.files[0]:null;if(!file)return;
   const reader=new FileReader();
   reader.onload=function(){
     try{
       const payload=JSON.parse(reader.result);
-      const restored=(payload && payload.data && typeof payload.data==="object")
-        ? payload.data : payload;
-
-      if(!restored || typeof restored!=="object" || Array.isArray(restored)){
-        throw new Error("Invalid ERP backup file.");
-      }
-
-      if(!confirm("Restore ERP Data?\n\nThe current ERP data will be replaced by the selected backup.")){
-        input.value="";
-        return;
-      }
-
-      Object.keys(restored).forEach(k=>{ D[k]=restored[k]; });
-
-      // Keep Additional Info compatible with the current ERP structure.
-      if(typeof ADDITIONAL_FIELDS!=="undefined"){
-        if(!D.additional || Array.isArray(D.additional)){
-          const old=Array.isArray(D.additional)?D.additional:[];
-          const migrated={};
-          ADDITIONAL_FIELDS.forEach(k=>migrated[k]=[]);
-          old.forEach(r=>{
-            ADDITIONAL_FIELDS.forEach(k=>{
-              if(r && r[k]) migrated[k].push(
-                typeof titleCaseText==="function" ? titleCaseText(r[k]) : String(r[k])
-              );
-            });
-          });
-          ADDITIONAL_FIELDS.forEach(k=>migrated[k]=[...new Set(migrated[k])]);
-          D.additional=migrated;
-        }else{
-          ADDITIONAL_FIELDS.forEach(k=>{
-            if(!Array.isArray(D.additional[k])) D.additional[k]=[];
-          });
-        }
-      }
-
-      save();
-      alert("Restore Completed Successfully.");
-      if(typeof go==="function") go("dashboard");
-    }catch(err){
-      alert("Restore Failed!\n\nThe selected JSON file is not a valid SAG FASHON LTD ERP backup.");
-    }finally{
-      input.value="";
-    }
+      const restored=normalizeRestoredERP(payload&&payload.data?payload.data:payload);
+      if(!confirm('Restore Full ERP Data?\n\nAll current ERP data will be replaced by the selected backup.')){input.value='';return;}
+      D=restored;save();alert('Full ERP Restore Completed Successfully.');go('dashboard');
+    }catch(err){alert('Restore Failed!\n\nThe selected file is not a valid SAG FASHON LTD ERP full backup.');}
+    finally{input.value='';}
   };
   reader.readAsText(file);
 }
@@ -213,12 +210,14 @@ nav.forEach(([p,t])=>{let b=document.createElement("button");b.textContent=t;b.o
 
 function entry(t){
   let fs=F[t];
-  content.innerHTML='<div class="panel"><h2>'+titles[t]+'</h2><form id="f" class="form">'+fs.map(f=>'<div class="field '+(f[0]==="remarks"?"wide":"")+'"><label>'+f[1]+'</label>'+fieldHTML(f)+'</div>').join("")+'<div class="actions"><button class="btn">Save</button></div></form></div><div class="panel"><div class="exportBar"><button class="btn exportBtn" id="entryExport">Download Excel</button></div><div id="tbl"></div></div>';
+  content.innerHTML='<div class="entryPage"><div class="panel entryFormPanel"><h2>'+titles[t]+'</h2><form id="f" class="form">'+fs.map(f=>'<div class="field '+(f[0]==="remarks"?"wide":"")+'"><label>'+f[1]+'</label>'+fieldHTML(f)+'</div>').join("")+'<div class="actions"><button class="btn">Save</button></div></form></div><div class="panel entryDataPanel"><div class="exportBar"><input id="entrySearch" class="tableSearch" placeholder="Search..." autocomplete="off"><button class="btn exportBtn" id="entryExport">Download Excel</button></div><div id="tbl"></div></div></div>';
   f.onsubmit=e=>{e.preventDefault();let o=Object.fromEntries(new FormData(f));fs.forEach(z=>{if(z[2]==="text"&&o[z[0]]!==undefined)o[z[0]]=titleCaseText(o[z[0]])});const missing=fs.filter(z=>z[0]!=="remarks"&&!String(o[z[0]]??"").trim()).map(z=>z[1]);if(missing.length){alert("Entry Not Saved!\n\nPlease Fill In The Following Required Field(s):\n\n"+missing.join("\n"));return}if(!validateAgainstAdditionalInfo(t,o))return;o.id=edit[t]||Date.now();D[t]=edit[t]?D[t].map(x=>x.id==o.id?o:x):[...D[t],o];delete edit[t];save();entry(t)};
   document.getElementById("entryExport").onclick=()=>exportTableExcel("entryTable",titles[t]);
+  document.getElementById("entrySearch").addEventListener("input",e=>filterTable("entryTable",e.target.value));
   renderTable(t);
 }
-function renderTable(t){let fs=F[t];tbl.innerHTML='<div class="tableWrap"><table id="entryTable"><thead><tr>'+fs.map(f=>'<th>'+titleCaseText(f[1])+'</th>').join("")+'<th>Actions</th></tr></thead><tbody>'+D[t].map(r=>'<tr>'+fs.map(f=>'<td>'+esc(r[f[0]])+'</td>').join("")+'<td><button class="edit" onclick="editRow(\''+t+'\',\''+r.id+'\')">Edit</button><button class="del" onclick="delRow(\''+t+'\',\''+r.id+'\')">Delete</button></td></tr>').join("")+'</tbody></table></div>'}
+function renderTable(t){let fs=F[t];tbl.innerHTML='<div class="tableWrap dataScroll"><table id="entryTable"><thead><tr>'+fs.map(f=>'<th>'+titleCaseText(f[1])+'</th>').join("")+'<th>Actions</th></tr></thead><tbody>'+D[t].map(r=>'<tr>'+fs.map(f=>'<td>'+esc(f[0]==="quantity"?formatQty(r[f[0]]):r[f[0]])+'</td>').join("")+'<td><button class="edit" onclick="editRow(\''+t+'\',\''+r.id+'\')">Edit</button><button class="del" onclick="delRow(\''+t+'\',\''+r.id+'\')">Delete</button></td></tr>').join("")+'</tbody></table></div>'}
+
 function editRow(t,id){let r=D[t].find(x=>x.id==id);edit[t]=id;F[t].forEach(f=>{let e=document.querySelector('[name="'+f[0]+'"]');if(e)e.value=r[f[0]]||""})}
 function delRow(t,id){if(confirm("Delete this entry?")){D[t]=D[t].filter(x=>x.id!=id);save();entry(t)}}
 
@@ -260,8 +259,8 @@ function stockMenu(){
 }
 function stock(t){
   const fs=stockFields(t),rs=groups(t),title={raw:'Grey Yarn Stock',dyed:'Dyed Yarn Stock',grey:'Grey Fabrics Stock'}[t];
-  sv.innerHTML='<div class="exportBar"><button class="btn exportBtn" id="stockExport">Download Excel</button></div><h2>'+title+'</h2><div class="tableWrap"><table id="stockTable"><thead><tr>'+fs.map(x=>'<th>'+titleCaseText(x)+'</th>').join('')+'<th>Total Received</th><th>Total Delivery</th><th>Balance</th></tr></thead><tbody>'+rs.map(x=>'<tr>'+fs.map(k=>'<td>'+esc(x.r[k])+'</td>').join('')+'<td>'+x.received.toFixed(2)+'</td><td>'+x.delivery.toFixed(2)+'</td><td>'+x.balance.toFixed(2)+'</td></tr>').join('')+'</tbody></table></div>';
-  document.getElementById('stockExport').onclick=()=>exportTableExcel('stockTable',title);
+  sv.innerHTML='<div class="exportBar"><input id="stockSearch" class="tableSearch" placeholder="Search..." autocomplete="off"><button class="btn exportBtn" id="stockExport">Download Excel</button></div><h2>'+title+'</h2><div class="tableWrap dataScroll"><table id="stockTable"><thead><tr>'+fs.map(x=>'<th>'+titleCaseText(x)+'</th>').join('')+'<th>Total Received</th><th>Total Delivery</th><th>Balance</th></tr></thead><tbody>'+rs.map(x=>'<tr>'+fs.map(k=>'<td>'+esc(x.r[k])+'</td>').join('')+'<td>'+x.received.toFixed(2)+'</td><td>'+x.delivery.toFixed(2)+'</td><td>'+x.balance.toFixed(2)+'</td></tr>').join('')+'</tbody></table></div>';
+  document.getElementById('stockExport').onclick=()=>exportTableExcel('stockTable',title);document.getElementById('stockSearch').addEventListener('input',e=>filterTable('stockTable',e.target.value));
 }
 
 function statementMenu(){content.innerHTML='<div class="choices"><button class="choice" onclick="statement(\'dyeing\')">Dyeing Statement</button><button class="choice" onclick="statement(\'knitting\')">Knitting Statement</button><button class="choice" onclick="statement(\'reqDyeing\')">Requirement Statement (Dyeing)</button><button class="choice" onclick="statement(\'reqKnitting\')">Requirement Statement (Knitting)</button></div><div class="panel" id="st">Select Statement.</div>'}
@@ -303,8 +302,15 @@ function statement(t){
 }
 
 function renderStatement(title,h,rows){
-  st.innerHTML='<div class="exportBar"><button class="btn exportBtn" id="statementExport">Download Excel</button></div><h2>'+title+'</h2><div class="tableWrap"><table id="statementTable"><thead><tr>'+h.map(x=>'<th>'+titleCaseText(x)+'</th>').join("")+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+esc(typeof x==="number"?x.toFixed(2):x)+'</td>').join("")+'</tr>').join("")+'</tbody></table></div>';
-  document.getElementById("statementExport").onclick=()=>exportTableExcel("statementTable",title);
+  st.innerHTML='<div class="exportBar"><input id="statementSearch" class="tableSearch" placeholder="Search..." autocomplete="off"><button class="btn exportBtn" id="statementExport">Download Excel</button></div><h2>'+title+'</h2><div class="tableWrap dataScroll"><table id="statementTable"><thead><tr>'+h.map(x=>'<th>'+titleCaseText(x)+'</th>').join("")+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+esc(typeof x==="number"?x.toFixed(2):x)+'</td>').join("")+'</tr>').join("")+'</tbody></table></div>';
+  document.getElementById("statementExport").onclick=()=>exportTableExcel("statementTable",title);document.getElementById("statementSearch").addEventListener('input',e=>filterTable('statementTable',e.target.value));
+}
+
+function formatQty(x){const n=Number(x);return Number.isFinite(n)?n.toFixed(2):"0.00"}
+function filterTable(tableId,query){
+  const table=document.getElementById(tableId);if(!table)return;
+  const q=String(query||"").trim().toLowerCase();
+  table.querySelectorAll("tbody tr").forEach(tr=>{tr.style.display=!q||tr.textContent.toLowerCase().includes(q)?"":"none"});
 }
 
 function exportTableExcel(tableId,fileTitle){
@@ -321,10 +327,11 @@ go("dashboard");
 
 
 /* ===== BACKUP & RESTORE SECTION ===== */
-function sagBackupStamp(){const d=new Date(),p=n=>String(n).padStart(2,"0");return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"_"+p(d.getHours())+"-"+p(d.getMinutes())+"-"+p(d.getSeconds())}
-function sagDownload(blob,name){const u=URL.createObjectURL(blob),a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000)}
-function sagFullJsonBackup(){try{const payload={backupType:"SAG FASHON LTD ERP FULL DATA BACKUP",backupMode:"FULL",createdAt:new Date().toISOString(),data:D};sagDownload(new Blob([JSON.stringify(payload,null,2)],{type:"application/json;charset=utf-8"}),"SAG_FASHON_LTD_ERP_FULL_BACKUP_"+sagBackupStamp()+".json");alert("Full JSON Backup Completed Successfully.")}catch(e){alert("JSON Backup Failed!\n\n"+e.message)}}
-function sagFullJsonRestore(input){const f=input.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const p=JSON.parse(r.result),x=p&&p.data?p.data:p;if(!x||typeof x!=="object"||Array.isArray(x))throw 0;if(!confirm("Restore Full JSON Backup?\n\nCurrent ERP data will be replaced.")){input.value="";return}D=x;D.raw??=[];D.dyed??=[];D.grey??=[];D.reqDyeing??=[];D.reqKnitting??=[];save();alert("Full JSON Restore Completed Successfully.");go("dashboard")}catch(e){alert("JSON Restore Failed!\n\nInvalid ERP full backup file.")}finally{input.value=""}};r.readAsText(f)}
-function sagFullExcelBackup(){try{if(typeof XLSX==="undefined"){alert("Excel library is unavailable. Please reload the ERP with internet access.");return}const wb=XLSX.utils.book_new();Object.keys(D).forEach(k=>{const v=D[k];let rows=Array.isArray(v)?v:[];if(!rows.length&&v&&typeof v==="object"&&!Array.isArray(v))rows=Object.keys(v).map(f=>({Field:f,Value:Array.isArray(v[f])?v[f].join(", "):v[f]}));const ws=rows.length?XLSX.utils.json_to_sheet(rows):XLSX.utils.aoa_to_sheet([["No Data"]]);let s=String(k).replace(/[\\\/\?\*\[\]\:]/g,"_").slice(0,31)||"Data";let n=1,o=s;while(wb.SheetNames.includes(s)){const q="_"+n++;s=o.slice(0,31-q.length)+q}XLSX.utils.book_append_sheet(wb,ws,s)});XLSX.writeFile(wb,"SAG_FASHON_LTD_ERP_FULL_BACKUP_"+sagBackupStamp()+".xlsx");alert("Full Excel Backup Completed Successfully.")}catch(e){alert("Excel Backup Failed!\n\n"+e.message)}}
-function sagFullExcelRestore(input){const f=input.files[0];if(!f)return;if(typeof XLSX==="undefined"){alert("Excel library is unavailable. Please reload the ERP with internet access.");input.value="";return}const r=new FileReader();r.onload=()=>{try{const wb=XLSX.read(r.result,{type:"array"}),x={};wb.SheetNames.forEach(s=>x[s]=XLSX.utils.sheet_to_json(wb.Sheets[s],{defval:""}));if(!confirm("Restore Full Excel Backup?\n\nCurrent ERP data will be replaced.")){input.value="";return}D=x;save();alert("Full Excel Restore Completed Successfully.");go("dashboard")}catch(e){alert("Excel Restore Failed!\n\nInvalid ERP Excel full backup file.")}finally{input.value=""}};r.readAsArrayBuffer(f)}
-function backupRestoreMenu(){content.innerHTML='<div class="panel"><h2>Backup & Restore</h2><p class="infoNote">Full backup saves all ERP data at the moment you click Backup.</p><div class="backupGrid"><div class="backupCard"><h3>JSON Backup / Restore</h3><button class="btn backupAction" onclick="sagFullJsonBackup()">Full JSON Backup</button><button class="btn backupAction secondary" onclick="document.getElementById(\'sagJsonRestore\').click()">Full JSON Restore</button><input id="sagJsonRestore" type="file" accept=".json,application/json" style="display:none" onchange="sagFullJsonRestore(this)"></div><div class="backupCard"><h3>Excel Backup / Restore</h3><button class="btn backupAction" onclick="sagFullExcelBackup()">Full Excel Backup</button><button class="btn backupAction secondary" onclick="document.getElementById(\'sagExcelRestore\').click()">Full Excel Restore</button><input id="sagExcelRestore" type="file" accept=".xlsx,.xls" style="display:none" onchange="sagFullExcelRestore(this)"></div></div><div class="backupWarning"><b>Important:</b> Restore replaces the current ERP data. Keep your backup file safely in Google Drive.</div></div>'}
+function sagBackupStamp(){const d=new Date(),p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'_'+p(d.getHours())+'-'+p(d.getMinutes())+'-'+p(d.getSeconds())}
+function sagDownload(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+function sagFullJsonBackup(){try{save();const snapshot=cloneERPData();const payload={backupType:'SAG FASHON LTD ERP FULL DATA BACKUP',backupMode:'FULL',backupVersion:'V16',createdAt:new Date().toISOString(),data:snapshot};sagDownload(new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'}),'SAG_FASHON_LTD_ERP_FULL_BACKUP_'+sagBackupStamp()+'.json');alert('Full JSON Backup Completed Successfully.\n\nAll ERP data, including Additional Info, has been included.')}catch(e){alert('JSON Backup Failed!\n\n'+e.message)}}
+function sagFullJsonRestore(input){const f=input.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const p=JSON.parse(r.result),x=normalizeRestoredERP(p&&p.data?p.data:p);if(!confirm('Restore Full ERP Data?\n\nCurrent ERP data will be replaced by the selected backup.')){input.value='';return}D=x;save();alert('Full JSON Restore Completed Successfully.\n\nAdditional Info and all other ERP data have been restored.');go('dashboard')}catch(e){alert('JSON Restore Failed!\n\nThe selected file is not a valid SAG FASHON LTD ERP full backup.')}finally{input.value=''}};r.readAsText(f)}
+function sagFullExcelBackup(){try{save();if(typeof XLSX==='undefined'){alert('Excel library is unavailable. Please reload the ERP with internet access.');return}const snapshot=cloneERPData(),wb=XLSX.utils.book_new();Object.keys(snapshot).forEach(k=>{const v=snapshot[k];let rows=Array.isArray(v)?v:[];if(v&&typeof v==='object'&&!Array.isArray(v))rows=Object.keys(v).map(field=>({Field:field,Value:Array.isArray(v[field])?JSON.stringify(v[field]):String(v[field]??'')}));const ws=rows.length?XLSX.utils.json_to_sheet(rows):XLSX.utils.aoa_to_sheet([['No Data']]);let s=String(k).replace(/[\\/\?\*\[\]\:]/g,'_').slice(0,31)||'Data',n=1,o=s;while(wb.SheetNames.includes(s)){const q='_'+n++;s=o.slice(0,31-q.length)+q}XLSX.utils.book_append_sheet(wb,ws,s)});XLSX.writeFile(wb,'SAG_FASHON_LTD_ERP_FULL_BACKUP_'+sagBackupStamp()+'.xlsx');alert('Full Excel Backup Completed Successfully.\n\nAll ERP data, including Additional Info, has been included.')}catch(e){alert('Excel Backup Failed!\n\n'+e.message)}}
+function sagFullExcelRestore(input){const f=input.files[0];if(!f)return;if(typeof XLSX==='undefined'){alert('Excel library is unavailable. Please reload the ERP with internet access.');input.value='';return}const r=new FileReader();r.onload=()=>{try{const wb=XLSX.read(r.result,{type:'array'}),x={};wb.SheetNames.forEach(s=>{const rows=XLSX.utils.sheet_to_json(wb.Sheets[s],{defval:''});if(s==='additional'){const a={};rows.forEach(row=>{if(row.Field)a[row.Field]=String(row.Value??'').trim()?(()=>{try{return JSON.parse(row.Value)}catch(_){return String(row.Value)}})():[]});x.additional=a}else{x[s]=rows}});const restored=normalizeRestoredERP(x);if(!confirm('Restore Full Excel ERP Data?\n\nCurrent ERP data will be replaced by the selected backup.')){input.value='';return}D=restored;save();alert('Full Excel Restore Completed Successfully.\n\nAdditional Info and all other ERP data have been restored.');go('dashboard')}catch(e){alert('Excel Restore Failed!\n\nThe selected file is not a valid SAG FASHON LTD ERP full backup.')}finally{input.value=''}};r.readAsArrayBuffer(f)}
+function backupRestoreMenu(){content.innerHTML='<div class="panel"><h2>Backup & Restore</h2><p class="infoNote">Full Backup saves the complete ERP data at the moment you click Backup, including Additional Info.</p><div class="backupGrid"><div class="backupCard"><h3>JSON Backup / Restore</h3><button class="btn backupAction" onclick="sagFullJsonBackup()">Full JSON Backup</button><button class="btn backupAction secondary" onclick="document.getElementById(\'sagJsonRestore\').click()">Full JSON Restore</button><input id="sagJsonRestore" type="file" accept=".json,application/json" style="display:none" onchange="sagFullJsonRestore(this)"></div><div class="backupCard"><h3>Excel Backup / Restore</h3><button class="btn backupAction" onclick="sagFullExcelBackup()">Full Excel Backup</button><button class="btn backupAction secondary" onclick="document.getElementById(\'sagExcelRestore\').click()">Full Excel Restore</button><input id="sagExcelRestore" type="file" accept=".xlsx,.xls" style="display:none" onchange="sagFullExcelRestore(this)"></div></div><div class="backupWarning"><b>Important:</b> Restore replaces the current ERP data. Keep your backup file safely in Google Drive.</div></div>'}
+
